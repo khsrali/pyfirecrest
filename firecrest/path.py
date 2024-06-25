@@ -310,6 +310,18 @@ class FcPath(os.PathLike):
                 self._cache.lst_mode = item._cache.lst_mode
                 return item._cache.lst_mode
         raise FileNotFoundError(self)
+    
+    def resolve(self) -> Self:
+        """Resolve a path, removing '..' and '.' components."""
+        parts = []
+        for part in self.parts:
+            if part == '..':
+                if parts:
+                    parts.pop()
+            elif part != '.':
+                parts.append(part)
+
+        return self._new_path(PurePosixPath(*parts))
 
     def _stat_mode(self) -> int:
         """Return the st_mode of the path, following symlinks."""
@@ -337,7 +349,11 @@ class FcPath(os.PathLike):
                 if stat.S_ISLNK(mode):
                     if not item._cache.link_target:
                         raise FileNotFoundError(f"Symlink has no target path: {self}")
-                    path = self._new_path(PurePosixPath(item._cache.link_target))
+                    pureposixpath = PurePosixPath(item._cache.link_target) 
+                    if not pureposixpath.is_absolute():
+                        path = path.parent.joinpath(pureposixpath).resolve()
+                    else:
+                        path = self._new_path(pureposixpath)
                     followed_links += 1
                     break
                 else:
@@ -455,11 +471,11 @@ class FcPath(os.PathLike):
             return False
         return stat.S_ISSOCK(st_mode)
 
-    def iterdir(self, hidden=True) -> Iterator[Self]:
+    def iterdir(self, hidden=True, recursive=False) -> Iterator[Self]:
         """Iterate over the directory entries."""
         with self.convert_header_exceptions():
             results = self._client.list_files(
-                self._machine, self.path, show_hidden=hidden
+                self._machine, self.path, show_hidden=hidden, recursive=recursive
             )
         for entry in results:
             yield self._new_path(
@@ -469,6 +485,10 @@ class FcPath(os.PathLike):
                     link_target=entry["link_target"],
                 ),
             )
+
+    def relpath(self, start: str | PurePosixPath) -> str:
+        """Return a relative version of this path."""
+        return self._path.relative_to(start)
 
     # operations that modify a file
 
@@ -516,7 +536,7 @@ class FcPath(os.PathLike):
         try:
             with self.convert_header_exceptions(
                 {
-                    "X-A-Directory": FileExistsError  # Note see: https://github.com/eth-cscs/firecrest/issues/172
+                    "X-Invalid-Path": FileExistsError  # Note see: https://github.com/eth-cscs/firecrest/issues/172
                 }
             ):
                 self._client.mkdir(self._machine, self.path, p=parents)
